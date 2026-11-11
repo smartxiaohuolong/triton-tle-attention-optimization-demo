@@ -16,7 +16,32 @@ _ROWS_Q_JIT = tl.constexpr(ROWS_Q)
 _TMA_STAGES_JIT = tl.constexpr(2)
 
 @triton.jit
-def rswgmma_uniform4096_kernel(Q, K_DESC, VT_DESC, BLOCK_IDS, TASK_MAP, QSCALE, KSCALE, VSCALE, OUT, mesh: tl.constexpr, B: tl.constexpr, H_Q: tl.constexpr, HEADS_PER_GROUP: tl.constexpr, D: tl.constexpr, DV: tl.constexpr, BLOCK_SIZE: tl.constexpr, MAX_BLOCKS: tl.constexpr, BLOCK_N: tl.constexpr, Q_STRIDE_B: tl.constexpr, Q_STRIDE_H: tl.constexpr, QS_STRIDE_B: tl.constexpr, QS_STRIDE_H: tl.constexpr, O_STRIDE_B: tl.constexpr, O_STRIDE_H: tl.constexpr):
+def rswgmma_uniform4096_kernel(
+    Q,
+    K_DESC,
+    VT_DESC,
+    BLOCK_IDS,
+    TASK_MAP,
+    QSCALE,
+    KSCALE,
+    VSCALE,
+    OUT,
+    mesh: tl.constexpr,
+    B: tl.constexpr,
+    H_Q: tl.constexpr,
+    HEADS_PER_GROUP: tl.constexpr,
+    D: tl.constexpr,
+    DV: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    MAX_BLOCKS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    Q_STRIDE_B: tl.constexpr,
+    Q_STRIDE_H: tl.constexpr,
+    QS_STRIDE_B: tl.constexpr,
+    QS_STRIDE_H: tl.constexpr,
+    O_STRIDE_B: tl.constexpr,
+    O_STRIDE_H: tl.constexpr,
+):
     cta = tl.program_id(0)
     cluster_rank = tle.shard_id(mesh, 'cluster_x')
     task_base = (cta * _TASK_SLOTS_JIT + 1) * _TASK_STRIDE_JIT
@@ -32,19 +57,8 @@ def rswgmma_uniform4096_kernel(Q, K_DESC, VT_DESC, BLOCK_IDS, TASK_MAP, QSCALE, 
     v_raw_smem = tle.gpu.alloc([_TMA_STAGES_JIT, BLOCK_N, DV], dtype=tl.float8e4nv, layout=None, scope=tle.gpu.smem)
     k_full = tle.gpu.alloc_barriers(num_barriers=_TMA_STAGES_JIT, arrive_count=1, expect_bytes=BLOCK_N * D)
     vt_full = tle.gpu.alloc_barriers(num_barriers=_TMA_STAGES_JIT, arrive_count=1, expect_bytes=DV * BLOCK_N)
-    if 8 == 2:
-        peer_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-    elif 8 == 4:
-        peer1_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer2_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer3_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer1_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer2_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        peer3_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-    else:
-        partial_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
-        partial_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
+    partial_acc_smem = tle.gpu.alloc([DV, _ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
+    partial_lse_smem = tle.gpu.alloc([_ROWS_Q_JIT], dtype=tl.float32, layout=None, scope=tle.gpu.smem, nv_mma_shared_layout=False)
     offs_q = tl.arange(0, _ROWS_Q_JIT)
     offs_d = tl.arange(0, D)
     offs_v = tl.arange(0, DV)
@@ -58,9 +72,8 @@ def rswgmma_uniform4096_kernel(Q, K_DESC, VT_DESC, BLOCK_IDS, TASK_MAP, QSCALE, 
     store_offs_v = offs_v
     q_smem_ptr = tle.gpu.local_ptr(q_smem, (q_rows, q_cols))
     p_smem_ptr = tle.gpu.local_ptr(p_smem, (p_rows, p_cols))
-    if 8 == 8:
-        partial_acc_ptr = tle.gpu.local_ptr(partial_acc_smem, (acc_rows, acc_cols))
-        partial_lse_ptr = tle.gpu.local_ptr(partial_lse_smem, (offs_q,))
+    partial_acc_ptr = tle.gpu.local_ptr(partial_acc_smem, (acc_rows, acc_cols))
+    partial_lse_ptr = tle.gpu.local_ptr(partial_lse_smem, (offs_q,))
     inv_sqrt_d = tl.rsqrt(tl.full((), D, tl.float32))
     kscale = tl.load(KSCALE + 0).to(tl.float32)
     vscale = tl.load(VSCALE + 0).to(tl.float32) / 256.0
@@ -131,131 +144,68 @@ def rswgmma_uniform4096_kernel(Q, K_DESC, VT_DESC, BLOCK_IDS, TASK_MAP, QSCALE, 
     acc = tl.where(has_value[None, :], acc / l_i[None, :] * vscale, 0.0)
     lse = tl.where(has_value, tl.log2(l_i) + m_i, -float('inf'))
     group_acc = acc
-    group_lse = lse
-    if 8 == 2:
-        peer_acc_remote = tle.remote(peer_acc_smem, 0, scope=mesh)
-        peer_lse_remote = tle.remote(peer_lse_smem, 0, scope=mesh)
-        if cluster_rank == 1:
-            tl.store(tle.gpu.local_ptr(peer_acc_remote, (acc_rows, acc_cols)), acc)
-            tl.store(tle.gpu.local_ptr(peer_lse_remote, (offs_q,)), lse)
-        tle.distributed_barrier(mesh)
-        if cluster_rank == 0:
-            peer_acc = tl.load(tle.gpu.local_ptr(peer_acc_smem, (acc_rows, acc_cols)))
-            peer_lse = tl.load(tle.gpu.local_ptr(peer_lse_smem, (offs_q,)))
-            max_lse = tl.maximum(lse, peer_lse)
-            valid_group = max_lse != -float('inf')
-            safe_max = tl.where(valid_group, max_lse, 0.0)
-            weight0 = tl.where(lse != -float('inf'), tl.exp2(lse - safe_max), 0.0)
-            weight1 = tl.where(peer_lse != -float('inf'), tl.exp2(peer_lse - safe_max), 0.0)
-            denom = weight0 + weight1
-            safe_denom = tl.where(denom > 0.0, denom, 1.0)
-            group_acc = (acc * weight0[None, :] + peer_acc * weight1[None, :]) / safe_denom[None, :]
-            group_acc = tl.where(valid_group[None, :], group_acc, 0.0)
-            group_lse = tl.where(valid_group, tl.log2(safe_denom) + safe_max, -float('inf'))
-    elif 8 == 4:
-        peer1_acc_remote = tle.remote(peer1_acc_smem, 0, scope=mesh)
-        peer2_acc_remote = tle.remote(peer2_acc_smem, 0, scope=mesh)
-        peer3_acc_remote = tle.remote(peer3_acc_smem, 0, scope=mesh)
-        peer1_lse_remote = tle.remote(peer1_lse_smem, 0, scope=mesh)
-        peer2_lse_remote = tle.remote(peer2_lse_smem, 0, scope=mesh)
-        peer3_lse_remote = tle.remote(peer3_lse_smem, 0, scope=mesh)
-        if cluster_rank == 1:
-            tl.store(tle.gpu.local_ptr(peer1_acc_remote, (acc_rows, acc_cols)), acc)
-            tl.store(tle.gpu.local_ptr(peer1_lse_remote, (offs_q,)), lse)
-        elif cluster_rank == 2:
-            tl.store(tle.gpu.local_ptr(peer2_acc_remote, (acc_rows, acc_cols)), acc)
-            tl.store(tle.gpu.local_ptr(peer2_lse_remote, (offs_q,)), lse)
-        elif cluster_rank == 3:
-            tl.store(tle.gpu.local_ptr(peer3_acc_remote, (acc_rows, acc_cols)), acc)
-            tl.store(tle.gpu.local_ptr(peer3_lse_remote, (offs_q,)), lse)
-        tle.distributed_barrier(mesh)
-        if cluster_rank == 0:
-            lse1 = tl.load(tle.gpu.local_ptr(peer1_lse_smem, (offs_q,)))
-            lse2 = tl.load(tle.gpu.local_ptr(peer2_lse_smem, (offs_q,)))
-            lse3 = tl.load(tle.gpu.local_ptr(peer3_lse_smem, (offs_q,)))
-            max_lse = tl.maximum(tl.maximum(lse, lse1), tl.maximum(lse2, lse3))
-            valid_group = max_lse != -float('inf')
-            safe_max = tl.where(valid_group, max_lse, 0.0)
-            weight0 = tl.where(lse != -float('inf'), tl.exp2(lse - safe_max), 0.0)
-            weight1 = tl.where(lse1 != -float('inf'), tl.exp2(lse1 - safe_max), 0.0)
-            weight2 = tl.where(lse2 != -float('inf'), tl.exp2(lse2 - safe_max), 0.0)
-            weight3 = tl.where(lse3 != -float('inf'), tl.exp2(lse3 - safe_max), 0.0)
-            denom = weight0 + weight1 + weight2 + weight3
-            safe_denom = tl.where(denom > 0.0, denom, 1.0)
-            weighted_acc = acc * weight0[None, :]
-            peer_acc = tl.load(tle.gpu.local_ptr(peer1_acc_smem, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc * weight1[None, :]
-            peer_acc = tl.load(tle.gpu.local_ptr(peer2_acc_smem, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc * weight2[None, :]
-            peer_acc = tl.load(tle.gpu.local_ptr(peer3_acc_smem, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc * weight3[None, :]
-            group_acc = weighted_acc / safe_denom[None, :]
-            group_acc = tl.where(valid_group[None, :], group_acc, 0.0)
-            group_lse = tl.where(valid_group, tl.log2(safe_denom) + safe_max, -float('inf'))
-    else:
-        tl.store(partial_acc_ptr, acc)
-        tl.store(partial_lse_ptr, lse)
-        tle.distributed_barrier(mesh)
-        peer1_acc = tle.remote(partial_acc_smem, 1, scope=mesh)
-        peer2_acc = tle.remote(partial_acc_smem, 2, scope=mesh)
-        peer3_acc = tle.remote(partial_acc_smem, 3, scope=mesh)
-        peer4_acc = tle.remote(partial_acc_smem, 4, scope=mesh)
-        peer5_acc = tle.remote(partial_acc_smem, 5, scope=mesh)
-        peer6_acc = tle.remote(partial_acc_smem, 6, scope=mesh)
-        peer7_acc = tle.remote(partial_acc_smem, 7, scope=mesh)
-        peer1_lse = tle.remote(partial_lse_smem, 1, scope=mesh)
-        peer2_lse = tle.remote(partial_lse_smem, 2, scope=mesh)
-        peer3_lse = tle.remote(partial_lse_smem, 3, scope=mesh)
-        peer4_lse = tle.remote(partial_lse_smem, 4, scope=mesh)
-        peer5_lse = tle.remote(partial_lse_smem, 5, scope=mesh)
-        peer6_lse = tle.remote(partial_lse_smem, 6, scope=mesh)
-        peer7_lse = tle.remote(partial_lse_smem, 7, scope=mesh)
-        if cluster_rank == 0:
-            lse1 = tl.load(tle.gpu.local_ptr(peer1_lse, (offs_q,)))
-            lse2 = tl.load(tle.gpu.local_ptr(peer2_lse, (offs_q,)))
-            lse3 = tl.load(tle.gpu.local_ptr(peer3_lse, (offs_q,)))
-            lse4 = tl.load(tle.gpu.local_ptr(peer4_lse, (offs_q,)))
-            lse5 = tl.load(tle.gpu.local_ptr(peer5_lse, (offs_q,)))
-            lse6 = tl.load(tle.gpu.local_ptr(peer6_lse, (offs_q,)))
-            lse7 = tl.load(tle.gpu.local_ptr(peer7_lse, (offs_q,)))
-            max_lse = tl.maximum(lse, lse1)
-            max_lse = tl.maximum(max_lse, lse2)
-            max_lse = tl.maximum(max_lse, lse3)
-            max_lse = tl.maximum(max_lse, lse4)
-            max_lse = tl.maximum(max_lse, lse5)
-            max_lse = tl.maximum(max_lse, lse6)
-            max_lse = tl.maximum(max_lse, lse7)
-            valid_group = max_lse != -float('inf')
-            safe_max = tl.where(valid_group, max_lse, 0.0)
-            weight0 = tl.where(lse != -float('inf'), tl.exp2(lse - safe_max), 0.0)
-            weight1 = tl.where(lse1 != -float('inf'), tl.exp2(lse1 - safe_max), 0.0)
-            weight2 = tl.where(lse2 != -float('inf'), tl.exp2(lse2 - safe_max), 0.0)
-            weight3 = tl.where(lse3 != -float('inf'), tl.exp2(lse3 - safe_max), 0.0)
-            weight4 = tl.where(lse4 != -float('inf'), tl.exp2(lse4 - safe_max), 0.0)
-            weight5 = tl.where(lse5 != -float('inf'), tl.exp2(lse5 - safe_max), 0.0)
-            weight6 = tl.where(lse6 != -float('inf'), tl.exp2(lse6 - safe_max), 0.0)
-            weight7 = tl.where(lse7 != -float('inf'), tl.exp2(lse7 - safe_max), 0.0)
-            denom = weight0 + weight1 + weight2 + weight3 + weight4 + weight5 + weight6 + weight7
-            safe_denom = tl.where(denom > 0.0, denom, 1.0)
-            weighted_acc = acc * weight0[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer1_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight1[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer2_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight2[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer3_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight3[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer4_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight4[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer5_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight5[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer6_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight6[None, :]
-            peer_acc_value = tl.load(tle.gpu.local_ptr(peer7_acc, (acc_rows, acc_cols)))
-            weighted_acc += peer_acc_value * weight7[None, :]
-            group_acc = weighted_acc / safe_denom[None, :]
-            group_acc = tl.where(valid_group[None, :], group_acc, 0.0)
-            group_lse = tl.where(valid_group, tl.log2(safe_denom) + safe_max, -float('inf'))
-        tle.distributed_barrier(mesh)
+    tl.store(partial_acc_ptr, acc)
+    tl.store(partial_lse_ptr, lse)
+    tle.distributed_barrier(mesh)
+    peer1_acc = tle.remote(partial_acc_smem, 1, scope=mesh)
+    peer2_acc = tle.remote(partial_acc_smem, 2, scope=mesh)
+    peer3_acc = tle.remote(partial_acc_smem, 3, scope=mesh)
+    peer4_acc = tle.remote(partial_acc_smem, 4, scope=mesh)
+    peer5_acc = tle.remote(partial_acc_smem, 5, scope=mesh)
+    peer6_acc = tle.remote(partial_acc_smem, 6, scope=mesh)
+    peer7_acc = tle.remote(partial_acc_smem, 7, scope=mesh)
+    peer1_lse = tle.remote(partial_lse_smem, 1, scope=mesh)
+    peer2_lse = tle.remote(partial_lse_smem, 2, scope=mesh)
+    peer3_lse = tle.remote(partial_lse_smem, 3, scope=mesh)
+    peer4_lse = tle.remote(partial_lse_smem, 4, scope=mesh)
+    peer5_lse = tle.remote(partial_lse_smem, 5, scope=mesh)
+    peer6_lse = tle.remote(partial_lse_smem, 6, scope=mesh)
+    peer7_lse = tle.remote(partial_lse_smem, 7, scope=mesh)
+    if cluster_rank == 0:
+        lse1 = tl.load(tle.gpu.local_ptr(peer1_lse, (offs_q,)))
+        lse2 = tl.load(tle.gpu.local_ptr(peer2_lse, (offs_q,)))
+        lse3 = tl.load(tle.gpu.local_ptr(peer3_lse, (offs_q,)))
+        lse4 = tl.load(tle.gpu.local_ptr(peer4_lse, (offs_q,)))
+        lse5 = tl.load(tle.gpu.local_ptr(peer5_lse, (offs_q,)))
+        lse6 = tl.load(tle.gpu.local_ptr(peer6_lse, (offs_q,)))
+        lse7 = tl.load(tle.gpu.local_ptr(peer7_lse, (offs_q,)))
+        max_lse = tl.maximum(lse, lse1)
+        max_lse = tl.maximum(max_lse, lse2)
+        max_lse = tl.maximum(max_lse, lse3)
+        max_lse = tl.maximum(max_lse, lse4)
+        max_lse = tl.maximum(max_lse, lse5)
+        max_lse = tl.maximum(max_lse, lse6)
+        max_lse = tl.maximum(max_lse, lse7)
+        valid_group = max_lse != -float('inf')
+        safe_max = tl.where(valid_group, max_lse, 0.0)
+        weight0 = tl.where(lse != -float('inf'), tl.exp2(lse - safe_max), 0.0)
+        weight1 = tl.where(lse1 != -float('inf'), tl.exp2(lse1 - safe_max), 0.0)
+        weight2 = tl.where(lse2 != -float('inf'), tl.exp2(lse2 - safe_max), 0.0)
+        weight3 = tl.where(lse3 != -float('inf'), tl.exp2(lse3 - safe_max), 0.0)
+        weight4 = tl.where(lse4 != -float('inf'), tl.exp2(lse4 - safe_max), 0.0)
+        weight5 = tl.where(lse5 != -float('inf'), tl.exp2(lse5 - safe_max), 0.0)
+        weight6 = tl.where(lse6 != -float('inf'), tl.exp2(lse6 - safe_max), 0.0)
+        weight7 = tl.where(lse7 != -float('inf'), tl.exp2(lse7 - safe_max), 0.0)
+        denom = weight0 + weight1 + weight2 + weight3 + weight4 + weight5 + weight6 + weight7
+        safe_denom = tl.where(denom > 0.0, denom, 1.0)
+        weighted_acc = acc * weight0[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer1_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight1[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer2_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight2[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer3_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight3[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer4_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight4[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer5_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight5[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer6_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight6[None, :]
+        peer_acc_value = tl.load(tle.gpu.local_ptr(peer7_acc, (acc_rows, acc_cols)))
+        weighted_acc += peer_acc_value * weight7[None, :]
+        group_acc = weighted_acc / safe_denom[None, :]
+        group_acc = tl.where(valid_group[None, :], group_acc, 0.0)
+    tle.distributed_barrier(mesh)
     if cluster_rank == 0:
         output_mask = (offs_q < HEADS_PER_GROUP)[None, :] & (hq < H_Q)[None, :]
         tl.store(OUT + batch * O_STRIDE_B + hq[None, :] * O_STRIDE_H + store_offs_v[:, None], group_acc, mask=output_mask)
